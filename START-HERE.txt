@@ -1,0 +1,10 @@
+NORTHSTAR US STOCK PORTFOLIO TRACKER — START HERE
+
+1. Read README.md from top to bottom.
+2. Deploy worker/ to Cloudflare (D1 + Worker).
+3. Set site/config.js to your deployed Worker URL.
+4. Publish the contents of site/ at the ROOT of a GitHub Pages repository.
+5. Open your GitHub Pages URL and enter the shared access key.
+
+The access key must be configured as a Cloudflare Worker secret named APP_ACCESS_KEY.
+Never place that key in GitHub files.
