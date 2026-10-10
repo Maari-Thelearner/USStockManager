@@ -1,0 +1,13 @@
+name = "northstar-portfolio-api"
+main = "src/index.js"
+compatibility_date = "2026-10-10"
+
+[[d1_databases]]
+binding = "PORTFOLIO_DB"
+database_name = "northstar-portfolio-db"
+database_id = "7d150a59-17f0-411b-af7c-669bf005b6ef"
+
+[vars]
+# Set this to the ORIGIN only, with no repository path.
+# Example for GitHub Pages: https://yourname.github.io
+ALLOWED_ORIGIN = "https://maari-thelearner.github.io"
