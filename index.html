@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Northstar — US Stock Portfolio</title>
+  <meta name="description" content="Personal US stock portfolio tracker with Cloudflare D1 cloud storage.">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="styles.css" rel="stylesheet">
+  <script src="config.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="#" data-page="dashboard"><span class="brand-mark"><i class="bi bi-compass-fill"></i></span><span>northstar<small>PORTFOLIO</small></span></a>
+      <div class="nav-caption">WORKSPACE</div>
+      <button class="nav-link active" data-page="dashboard"><i class="bi bi-grid-1x2"></i> Overview</button>
+      <button class="nav-link" data-page="wallet"><i class="bi bi-wallet2"></i> USD wallet</button>
+      <button class="nav-link" data-page="allocations"><i class="bi bi-pie-chart"></i> Monthly plan</button>
+      <button class="nav-link" data-page="orders"><i class="bi bi-arrow-left-right"></i> Buy orders</button>
+      <button class="nav-link" data-page="assets"><i class="bi bi-layers"></i> Watchlist & holdings</button>
+      <div class="sidebar-bottom">
+        <div class="cloud-status"><span class="status-dot" id="statusDot"></span><div><strong id="cloudStatus">Connecting…</strong><small id="cloudSubstatus">Cloud database</small></div></div>
+        <button class="nav-link" data-page="settings"><i class="bi bi-sliders"></i> Settings & backup</button>
+        <button class="nav-link" id="changeKeyBtn"><i class="bi bi-key"></i> Change access key</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <button class="mobile-menu" id="mobileMenu" aria-label="Open navigation"><i class="bi bi-list"></i></button>
+        <div><div class="eyebrow" id="pageEyebrow">YOUR MONEY, IN ONE VIEW</div><h1 id="pageTitle">Portfolio overview</h1></div>
+        <div class="top-actions">
+          <span class="cloud-chip"><span class="status-dot"></span> Cloud synced</span>
+          <button class="btn btn-primary" id="quickBuy"><i class="bi bi-plus-lg me-1"></i> Add buy order</button>
+        </div>
+      </header>
+
+      <section class="page active" id="page-dashboard">
+        <div class="welcome-row"><div><h2>Your portfolio, at a glance.</h2><p>Track your US investments and keep your monthly plan on course.</p></div><div class="date-chip"><i class="bi bi-calendar3"></i> <span id="todayLabel"></span></div></div>
+        <div class="metric-grid">
+          <div class="metric-card"><div class="metric-label">PORTFOLIO VALUE <span class="metric-icon purple"><i class="bi bi-graph-up-arrow"></i></span></div><div class="metric-value" id="metricValue">$0.00</div><div class="metric-foot">Based on latest prices entered</div></div>
+          <div class="metric-card"><div class="metric-label">INVESTED PRINCIPAL <span class="metric-icon blue"><i class="bi bi-cash-stack"></i></span></div><div class="metric-value" id="metricInvested">$0.00</div><div class="metric-foot">Excludes buy commissions</div></div>
+          <div class="metric-card"><div class="metric-label">UNREALIZED P/L <span class="metric-icon green"><i class="bi bi-activity"></i></span></div><div class="metric-value" id="metricPL">$0.00</div><div class="metric-foot" id="metricPLFoot">0.00% return</div></div>
+          <div class="metric-card"><div class="metric-label">USD WALLET <span class="metric-icon orange"><i class="bi bi-wallet2"></i></span></div><div class="metric-value" id="metricWallet">$0.00</div><div class="metric-foot">Credited minus order spend</div></div>
+        </div>
+        <div class="content-grid">
+          <div class="panel"><div class="panel-heading"><div><h3>Portfolio holdings</h3><p>Position size and current market value</p></div><button class="btn btn-sm btn-outline-secondary" data-goto="assets">Manage assets</button></div><div class="table-responsive"><table class="table clean-table"><thead><tr><th>ASSET</th><th>SHARES</th><th>AVG COST</th><th>PRICE</th><th>VALUE</th><th>P/L</th></tr></thead><tbody id="holdingsTable"></tbody></table></div><div class="empty-state d-none" id="holdingsEmpty">Add an asset and a buy order to see holdings here.</div></div>
+          <div class="panel"><div class="panel-heading"><div><h3>Monthly allocation</h3><p id="allocationMonthLabel">Budget progress this month</p></div><button class="icon-button" data-goto="allocations" aria-label="View plan"><i class="bi bi-arrow-up-right"></i></button></div><div class="budget-summary"><span>Monthly budget</span><strong id="budgetTotal">$50.00</strong></div><div class="progress budget-progress"><div class="progress-bar" id="budgetProgress" style="width:0%"></div></div><div class="budget-stats"><span id="budgetSpent">$0.00 spent</span><strong id="budgetRemaining">$50.00 left</strong></div><div id="miniAllocations" class="mini-allocations"></div><button class="btn btn-light w-100 mt-3" data-goto="allocations">View monthly plan <i class="bi bi-arrow-right ms-1"></i></button></div>
+        </div>
+        <div class="panel"><div class="panel-heading"><div><h3>Recent activity</h3><p>Your latest wallet funding and buy orders</p></div><button class="btn btn-sm btn-outline-secondary" data-goto="orders">All transactions</button></div><div id="recentActivity" class="activity-list"></div></div>
+      </section>
+
+      <section class="page" id="page-wallet">
+        <div class="page-intro"><div><h2>USD wallet</h2><p>Record INR transfers and calculate the actual USD credited to your broker wallet.</p></div><button class="btn btn-primary" id="addWalletBtn"><i class="bi bi-plus-lg me-1"></i> Record funding</button></div>
+        <div class="metric-grid three-metrics"><div class="metric-card"><div class="metric-label">TOTAL USD CREDITED</div><div class="metric-value" id="walletCredited">$0.00</div></div><div class="metric-card"><div class="metric-label">TOTAL BUY SPEND</div><div class="metric-value" id="walletSpent">$0.00</div></div><div class="metric-card"><div class="metric-label">AVAILABLE BALANCE</div><div class="metric-value" id="walletAvailable">$0.00</div></div></div>
+        <div class="panel"><div class="panel-heading"><div><h3>Funding history</h3><p>INR sent, conversion rate, fees and credited USD</p></div></div><div class="table-responsive"><table class="table clean-table"><thead><tr><th>DATE</th><th>INR SENT</th><th>FX RATE</th><th>GST + FEES</th><th>USD CREDITED</th><th>NOTE</th><th></th></tr></thead><tbody id="walletTable"></tbody></table></div><div class="empty-state d-none" id="walletEmpty">No wallet funding recorded yet.</div></div>
+      </section>
+
+      <section class="page" id="page-allocations">
+        <div class="page-intro"><div><h2>Monthly investment plan</h2><p>Set a budget and split it across your chosen US stocks and ETFs.</p></div><button class="btn btn-primary" id="editBudgetBtn"><i class="bi bi-sliders me-1"></i> Edit budget</button></div>
+        <div class="panel allocation-overview"><div><span class="section-kicker">THIS MONTH</span><h3 id="allocMonthHeading">Monthly allocation</h3><p>Targets are based on each asset’s allocation percentage.</p></div><div class="budget-big"><span>Monthly budget</span><strong id="allocationBudgetBig">$50.00</strong><small id="allocationTotalPct">100% allocated</small></div></div>
+        <div id="allocationCards" class="allocation-cards"></div>
+        <div id="allocationWarning" class="inline-warning d-none"><i class="bi bi-exclamation-triangle me-1"></i> Your allocations must total 100% for a balanced plan.</div>
+      </section>
+
+      <section class="page" id="page-orders">
+        <div class="page-intro"><div><h2>Buy orders</h2><p>Log fractional-share purchases with commission included in the cash spend.</p></div><button class="btn btn-primary" id="addOrderBtn"><i class="bi bi-plus-lg me-1"></i> Add buy order</button></div>
+        <div class="panel"><div class="panel-heading"><div><h3>Order history</h3><p>Shares are calculated as (total spend − commission) ÷ purchase price.</p></div></div><div class="table-responsive"><table class="table clean-table"><thead><tr><th>DATE</th><th>ASSET</th><th>PRICE</th><th>TOTAL SPEND</th><th>COMMISSION</th><th>SHARES BOUGHT</th><th></th></tr></thead><tbody id="ordersTable"></tbody></table></div><div class="empty-state d-none" id="ordersEmpty">No buy orders recorded yet.</div></div>
+      </section>
+
+      <section class="page" id="page-assets">
+        <div class="page-intro"><div><h2>Watchlist & holdings</h2><p>Manage your tracked companies, allocation percentages and current prices.</p></div><button class="btn btn-primary" id="addAssetBtn"><i class="bi bi-plus-lg me-1"></i> Add asset</button></div>
+        <div class="panel"><div class="panel-heading"><div><h3>Tracked assets</h3><p>Update prices manually or use your preferred market-data source.</p></div><span class="allocation-total-pill" id="assetAllocationTotal">100% allocated</span></div><div class="table-responsive"><table class="table clean-table"><thead><tr><th>ASSET</th><th>ALLOCATION</th><th>LAST PRICE</th><th>SHARES</th><th>MARKET VALUE</th><th></th></tr></thead><tbody id="assetsTable"></tbody></table></div><div class="empty-state d-none" id="assetsEmpty">Add your first stock or ETF.</div></div>
+      </section>
+
+      <section class="page" id="page-settings">
+        <div class="page-intro"><div><h2>Settings & backup</h2><p>Adjust transaction assumptions and keep a copy of your portfolio data.</p></div></div>
+        <div class="settings-grid">
+          <div class="panel settings-panel"><div class="panel-heading"><div><h3>Wallet & transaction defaults</h3><p>Used to prefill new transactions</p></div><span class="settings-icon"><i class="bi bi-calculator"></i></span></div>
+            <form id="settingsForm"><label class="form-label">INR per 1 USD (FX rate)</label><input class="form-control mb-3" id="settingFx" type="number" step="0.0001" min="0.0001" required>
+            <label class="form-label">GST / fixed transfer tax (₹)</label><input class="form-control mb-3" id="settingGst" type="number" step="0.01" min="0" required>
+            <label class="form-label">Platform fee (₹)</label><input class="form-control mb-3" id="settingPlatformFee" type="number" step="0.01" min="0" required>
+            <label class="form-label">Default buy commission (USD)</label><input class="form-control mb-3" id="settingCommission" type="number" step="0.001" min="0" required>
+            <button class="btn btn-primary" type="submit">Save settings</button></form>
+          </div>
+          <div class="panel settings-panel"><div class="panel-heading"><div><h3>Data backup</h3><p>Export or restore the cloud snapshot</p></div><span class="settings-icon"><i class="bi bi-cloud-arrow-down"></i></span></div><div class="info-box mb-3"><i class="bi bi-info-circle"></i><span>Your portfolio is saved in Cloudflare D1. This backup is an additional copy, not the primary database.</span></div><button class="btn btn-outline-primary w-100 mb-2" id="exportBtn"><i class="bi bi-download me-2"></i>Export JSON backup</button><label class="btn btn-outline-secondary w-100 mb-3" for="importFile"><i class="bi bi-upload me-2"></i>Import JSON backup</label><input type="file" class="d-none" id="importFile" accept="application/json,.json"><div class="small-muted">Import replaces the current cloud snapshot. Export a backup before importing. Do not include broker passwords or account credentials.</div><hr><button class="btn btn-outline-danger w-100" id="resetBtn"><i class="bi bi-trash3 me-2"></i>Reset portfolio data</button></div>
+        </div>
+        <div class="panel settings-panel mt-3"><div class="panel-heading"><div><h3>Cloud connection</h3><p>Connection details for this deployment</p></div><span class="settings-icon"><i class="bi bi-shield-lock"></i></span></div><div class="connection-details"><div><span>API endpoint</span><code id="apiEndpointLabel">Not configured</code></div><div><span>Database</span><strong>Cloudflare D1</strong></div><div><span>Access</span><strong>Single shared access key (no user accounts)</strong></div></div><p class="small-muted mt-3 mb-0">The access key is kept in this browser tab’s session storage and is not part of the public website files. Anyone who knows the key can access the portfolio, so use a strong unique value and do not share it.</p></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Shared access key modal -->
+  <div class="modal fade" id="keyModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header"><div><h5 class="modal-title">Connect your private portfolio</h5><p class="modal-subtitle">Enter the shared access key configured in your Cloudflare Worker.</p></div></div><div class="modal-body"><label class="form-label">Portfolio access key</label><input id="accessKeyInput" type="password" class="form-control" autocomplete="current-password" placeholder="Enter your private key"><div class="small-muted mt-2">This is a single shared key, not a user account. It is kept only for this browser tab session.</div><div class="error-text mt-2" id="keyError"></div></div><div class="modal-footer"><button class="btn btn-primary" id="connectBtn">Connect to cloud database</button></div></div></div></div>
+
+  <!-- Asset modal -->
+  <div class="modal fade" id="assetModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><form class="modal-content" id="assetForm"><div class="modal-header"><div><h5 class="modal-title" id="assetModalTitle">Add asset</h5><p class="modal-subtitle">Track a stock or ETF in your portfolio.</p></div><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="assetId"><label class="form-label">Company / ETF name</label><input id="assetName" class="form-control mb-3" required maxlength="80" placeholder="NVIDIA"><div class="row g-3"><div class="col-6"><label class="form-label">Ticker symbol</label><input id="assetSymbol" class="form-control" required maxlength="12" placeholder="NVDA"></div><div class="col-6"><label class="form-label">Allocation (%)</label><input id="assetAllocation" class="form-control" type="number" min="0" max="100" step="0.1" required value="0"></div><div class="col-12"><label class="form-label">Current market price (USD)</label><input id="assetPrice" class="form-control" type="number" min="0" step="0.0001" required value="0"></div></div></div><div class="modal-footer"><button class="btn btn-light" type="button" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" type="submit">Save asset</button></div></form></div></div>
+
+  <!-- Wallet modal -->
+  <div class="modal fade" id="walletModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><form class="modal-content" id="walletForm"><div class="modal-header"><div><h5 class="modal-title" id="walletModalTitle">Record wallet funding</h5><p class="modal-subtitle">Enter the transfer details and review the calculated USD credit.</p></div><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="walletId"><div class="row g-3"><div class="col-6"><label class="form-label">Date</label><input id="walletDate" class="form-control" type="date" required></div><div class="col-6"><label class="form-label">INR sent (₹)</label><input id="walletInr" class="form-control" type="number" min="0.01" step="0.01" required></div><div class="col-6"><label class="form-label">FX rate (₹ / USD)</label><input id="walletFx" class="form-control" type="number" min="0.0001" step="0.0001" required></div><div class="col-6"><label class="form-label">GST / tax (₹)</label><input id="walletGst" class="form-control" type="number" min="0" step="0.01" required></div><div class="col-6"><label class="form-label">Platform fee (₹)</label><input id="walletFee" class="form-control" type="number" min="0" step="0.01" required></div><div class="col-6"><label class="form-label">Actual USD credited</label><input id="walletUsd" class="form-control" type="number" min="0" step="0.0001" required></div><div class="col-12"><label class="form-label">Note (optional)</label><input id="walletNote" class="form-control" maxlength="160" placeholder="e.g. Federal Bank transfer"></div></div><div class="calculation-box mt-3"><div><span>Estimated USD after listed INR fees</span><strong id="walletEstimate">$0.00</strong></div><small>Estimated USD = (INR sent − GST − platform fee) ÷ FX rate. Actual USD credited can be manually adjusted to match your wallet statement.</small></div></div><div class="modal-footer"><button class="btn btn-light" type="button" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" type="submit">Save funding</button></div></form></div></div>
+
+  <!-- Order modal -->
+  <div class="modal fade" id="orderModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><form class="modal-content" id="orderForm"><div class="modal-header"><div><h5 class="modal-title" id="orderModalTitle">Add buy order</h5><p class="modal-subtitle">Fractional shares are calculated after commission.</p></div><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="orderId"><div class="row g-3"><div class="col-6"><label class="form-label">Order date</label><input id="orderDate" class="form-control" type="date" required></div><div class="col-6"><label class="form-label">Asset</label><select id="orderAsset" class="form-select" required></select></div><div class="col-6"><label class="form-label">Purchase price (USD)</label><input id="orderPrice" class="form-control" type="number" min="0.0001" step="0.0001" required></div><div class="col-6"><label class="form-label">Total cash spend (USD)</label><input id="orderSpend" class="form-control" type="number" min="0.01" step="0.01" required></div><div class="col-6"><label class="form-label">Commission (USD)</label><input id="orderCommission" class="form-control" type="number" min="0" step="0.001" required></div><div class="col-6"><label class="form-label">Shares purchased</label><div class="calculated-field" id="orderSharesPreview">0.000000</div></div></div><div class="calculation-box mt-3"><div><span>Principal invested (excl. commission)</span><strong id="orderPrincipalPreview">$0.00</strong></div><small>Cash wallet balance decreases by total cash spend. Principal invested excludes commission for average cost and unrealized P/L calculations.</small></div></div><div class="modal-footer"><button class="btn btn-light" type="button" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" type="submit">Save buy order</button></div></form></div></div>
+
+  <div class="toast-container position-fixed bottom-0 end-0 p-3"><div id="appToast" class="toast" role="status"><div class="d-flex"><div class="toast-body" id="toastMessage">Saved</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div></div>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
