@@ -1,227 +1,74 @@
 (() => {
-  "use strict";
-  const $ = id => document.getElementById(id);
+  const cfg = window.APP_CONFIG || {}; const API = (cfg.API_BASE_URL || '').replace(/\/$/, '');
+  const KEY = cfg.APP_ACCESS_KEY || '';
+  const $ = (s, root=document) => root.querySelector(s);
+  const money = (n, d=2) => '$' + Number(n || 0).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+  const inr = n => '₹' + Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
+  const fmt = (v, d=4) => Number(v||0).toLocaleString('en-US',{maximumFractionDigits:d});
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const today = () => new Date().toISOString().slice(0,10);
-  const uid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const n = (v, fallback=0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
-  const money = (v, currency="USD") => new Intl.NumberFormat("en-US",{style:"currency",currency,minimumFractionDigits:2,maximumFractionDigits:2}).format(n(v));
-  const num = (v, digits=6) => n(v).toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:digits});
-  const pct = v => `${n(v).toFixed(1)}%`;
-  const esc = s => String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  const monthKey = d => String(d || "").slice(0,7);
-  const monthLabel = () => new Date().toLocaleDateString("en-US",{month:"long",year:"numeric"});
-  const defaultState = () => ({
-    schemaVersion:1,
-    settings:{fx:96.75,gst:45,platformFee:0,buyCommission:0.02},
-    monthlyBudget:50,
-    assets:[
-      {id:uid(),name:"NVIDIA",symbol:"NVDA",allocation:25,price:229.82},
-      {id:uid(),name:"QQQM ETF",symbol:"QQQM",allocation:25,price:0},
-      {id:uid(),name:"Microsoft",symbol:"MSFT",allocation:30,price:0},
-      {id:uid(),name:"Alphabet",symbol:"GOOGL",allocation:20,price:0}
-    ],
-    wallet:[],orders:[]
-  });
-  const normalizeState = value => {
-    const defaults=defaultState(), v=value||{};
-    return {
-      schemaVersion:1,
-      settings:{...defaults.settings,...(v.settings||{})},
-      monthlyBudget:Math.max(0,n(v.monthlyBudget,50)),
-      assets:Array.isArray(v.assets)?v.assets:defaults.assets,
-      wallet:Array.isArray(v.wallet)?v.wallet:[],
-      orders:Array.isArray(v.orders)?v.orders:[]
-    };
-  };
-  let state=defaultState(), accessKey="", saveTimer=null, dirty=false, loading=false;
-  const config=window.PORTFOLIO_CONFIG||{};
-  const apiBase=String(config.apiBaseUrl||"").replace(/\/+$/,"");
-  const toast = message => { $("toastMessage").textContent=message; bootstrap.Toast.getOrCreateInstance($("appToast"),{delay:3000}).show(); };
-  const modal = id => bootstrap.Modal.getOrCreateInstance($(id));
-  const showModal = id => modal(id).show();
-  const hideModal = id => modal(id).hide();
-  const setCloudStatus = (text,kind="ok",sub="Cloudflare D1") => {
-    $("cloudStatus").textContent=text; $("cloudSubstatus").textContent=sub;
-    $("statusDot").className=`status-dot ${kind==="error"?"error":kind==="wait"?"offline":""}`;
-    document.querySelector(".cloud-chip .status-dot").className=`status-dot ${kind==="error"?"error":kind==="wait"?"offline":""}`;
-  };
-  const api = async (method="GET", body) => {
-    if(!apiBase || apiBase.includes("YOUR-WORKER-NAME")) throw new Error("Set your Cloudflare Worker URL in site/config.js first.");
-    const response=await fetch(`${apiBase}/api/state`,{
-      method,headers:{"Content-Type":"application/json","X-Portfolio-Key":accessKey},
-      ...(body===undefined?{}:{body:JSON.stringify(body)})
-    });
-    let data={}; try{data=await response.json();}catch{}
-    if(!response.ok) throw new Error(data.error||`Cloud API returned ${response.status}.`);
-    return data;
-  };
-  const saveCloud = async () => {
-    if(!dirty || loading || !accessKey) return;
-    clearTimeout(saveTimer); dirty=false; setCloudStatus("Saving…","wait");
-    try { await api("PUT",state); setCloudStatus("Cloud saved","ok","Changes synced"); }
-    catch(err){dirty=true;setCloudStatus("Save failed","error","Check connection/key");toast(`Cloud save failed: ${err.message}`);}
-  };
-  const queueSave = () => { dirty=true;setCloudStatus("Unsaved changes","wait","Saving shortly…");clearTimeout(saveTimer);saveTimer=setTimeout(saveCloud,450); };
-  const connect = async key => {
-    accessKey=key.trim();
-    if(!accessKey) throw new Error("Enter your shared access key.");
-    sessionStorage.setItem("northstarPortfolioAccessKey",accessKey);
-    setCloudStatus("Connecting…","wait");
-    const result=await api("GET");
-    if(result.state) state=normalizeState(result.state); else state=defaultState();
-    loading=false; renderAll(); hideModal("keyModal"); setCloudStatus("Cloud connected","ok","Cloudflare D1");
-    if(!result.state){queueSave();toast("Connected. Your new portfolio has been initialized.");}
-  };
-  const asset = id => state.assets.find(a=>a.id===id);
-  const totalUsdCredited = () => state.wallet.reduce((s,w)=>s+n(w.usdCredited),0);
-  const totalSpend = () => state.orders.reduce((s,o)=>s+n(o.totalSpend),0);
-  const walletBalance = () => totalUsdCredited()-totalSpend();
-  const orderPrincipal = o => Math.max(0,n(o.totalSpend)-n(o.commission));
-  const orderShares = o => n(o.price)>0 ? orderPrincipal(o)/n(o.price) : 0;
-  const ordersFor = id => state.orders.filter(o=>o.assetId===id);
-  const holdingsFor = id => {
-    const orders=ordersFor(id),shares=orders.reduce((s,o)=>s+orderShares(o),0),principal=orders.reduce((s,o)=>s+orderPrincipal(o),0),price=n(asset(id)?.price);
-    return {orders,shares,principal,avg:shares?principal/shares:0,price,value:shares*price,pl:shares*price-principal,plPct:principal?(shares*price-principal)/principal*100:0};
-  };
-  const currentMonthOrders = () => state.orders.filter(o=>monthKey(o.date)===monthKey(today()));
-  const monthInvestedFor = id => currentMonthOrders().filter(o=>o.assetId===id).reduce((s,o)=>s+orderPrincipal(o),0);
-  const totalMonthInvested = () => currentMonthOrders().reduce((s,o)=>s+orderPrincipal(o),0);
-  const targetUsd = a => state.monthlyBudget*n(a.allocation)/100;
-  const totalAllocation = () => state.assets.reduce((s,a)=>s+n(a.allocation),0);
-  const avatar = a => `<span class="asset-avatar">${esc((a.symbol||a.name||"?").slice(0,4).toUpperCase())}</span>`;
-  const assetCell = a => `<div class="asset-cell">${avatar(a)}<div><div class="asset-name">${esc(a.name)}</div><div class="asset-symbol">${esc(a.symbol)}</div></div></div>`;
-  const signedMoney = v => `<span class="${v>0?'positive':v<0?'negative':''}">${v>0?'+':''}${money(v)}</span>`;
-  const actionButtons = (type,id) => `<button class="table-action" title="Edit" data-edit="${type}" data-id="${esc(id)}"><i class="bi bi-pencil"></i></button><button class="table-action" title="Delete" data-delete="${type}" data-id="${esc(id)}"><i class="bi bi-trash3"></i></button>`;
-  const pageMeta={dashboard:["YOUR MONEY, IN ONE VIEW","Portfolio overview"],wallet:["CASH MANAGEMENT","USD wallet"],allocations:["PLAN YOUR MONTH","Monthly plan"],orders:["TRANSACTION RECORD","Buy orders"],assets:["TRACK YOUR POSITIONS","Watchlist & holdings"],settings:["PREFERENCES","Settings & backup"]};
-  function goPage(page){
-    if(!pageMeta[page])return;
-    document.querySelectorAll(".page").forEach(p=>p.classList.toggle("active",p.id===`page-${page}`));
-    document.querySelectorAll(".nav-link[data-page]").forEach(b=>b.classList.toggle("active",b.dataset.page===page));
-    $("pageEyebrow").textContent=pageMeta[page][0];$("pageTitle").textContent=pageMeta[page][1];
-    $("sidebar").classList.remove("open");window.scrollTo({top:0,behavior:"smooth"});
+  const currentMonth = () => today().slice(0,7);
+  const state = {page:'overview', settings:{fx_rate:95.75,gst_inr:45,platform_fee_inr:0,buy_commission_usd:.01},assets:[],funding:[],plans:[],orders:[],month:currentMonth(),quotesBusy:false,quoteBusySymbols:[],initialQuoteLoad:true};
+  let modal, editContext = null;
+  const pageNames = {overview:'Portfolio overview',wallet:'USD Wallet',plan:'Monthly investment plan',orders:'Buy orders',assets:'Watchlist & holdings',settings:'Settings'};
+  async function api(path, method='GET', data) {
+    if (!API || API.includes('REPLACE-WITH') || !KEY || KEY.includes('REPLACE-WITH')) throw new Error('Configure API_BASE_URL and APP_ACCESS_KEY in config.js before using the app.');
+    const res = await fetch(API + '/api/' + path, {method,headers:{'Content-Type':'application/json','X-App-Key':KEY}, ...(data===undefined?{}:{body:JSON.stringify(data)})});
+    let out={}; try {out=await res.json()} catch {}
+    if(!res.ok) throw new Error(out.error || `Request failed (${res.status})`);
+    return out;
   }
-  function renderDashboard(){
-    const all=state.assets.map(a=>({a,h:holdingsFor(a.id)})).filter(x=>x.h.shares>0);
-    const invested=all.reduce((s,x)=>s+x.h.principal,0),value=all.reduce((s,x)=>s+x.h.value,0),pl=value-invested,plPct=invested?pl/invested*100:0;
-    $("metricValue").textContent=money(value);$("metricInvested").textContent=money(invested);$("metricPL").textContent=`${pl>0?"+":""}${money(pl)}`;
-    $("metricPL").className=`metric-value ${pl>0?"positive":pl<0?"negative":""}`;$("metricPLFoot").innerHTML=`<span class="${pl>0?"positive":pl<0?"negative":""}">${plPct>0?"+":""}${plPct.toFixed(2)}%</span> unrealized return`;
-    $("metricWallet").textContent=money(walletBalance());$("todayLabel").textContent=new Date().toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"});
-    const rows=all.map(({a,h})=>`<tr><td>${assetCell(a)}</td><td>${num(h.shares,6)}</td><td>${money(h.avg)}</td><td>${money(h.price)}</td><td><strong>${money(h.value)}</strong></td><td>${signedMoney(h.pl)}<div class="asset-symbol">${h.plPct.toFixed(2)}%</div></td></tr>`).join("");
-    $("holdingsTable").innerHTML=rows;$("holdingsEmpty").classList.toggle("d-none",all.length>0);
-    $("allocationMonthLabel").textContent=`${monthLabel()} budget progress`;$("budgetTotal").textContent=money(state.monthlyBudget);
-    const spent=totalMonthInvested(),remaining=state.monthlyBudget-spent,progress=state.monthlyBudget>0?Math.min(100,spent/state.monthlyBudget*100):0;
-    $("budgetProgress").style.width=`${progress}%`;$("budgetSpent").textContent=`${money(spent)} spent`;$("budgetRemaining").textContent=`${money(remaining)} ${remaining<0?"over budget":"left"}`;
-    $("miniAllocations").innerHTML=state.assets.map(a=>`<div class="mini-row">${avatar(a)}<div class="mini-info"><strong>${esc(a.name)}</strong><small>${pct(a.allocation)} of budget</small></div><div class="mini-amount">${money(monthInvestedFor(a.id))}<small>of ${money(targetUsd(a))}</small></div></div>`).join("")||'<div class="empty-state">Add assets to create a plan.</div>';
-    const activities=[
-      ...state.wallet.map(w=>({date:w.date,type:"funding",title:"Wallet funding",detail:`₹${num(w.inrSent,2)} converted at ₹${num(w.fx,4)}/USD`,amount:`+${money(w.usdCredited)}`,sort:w.date})),
-      ...state.orders.map(o=>({date:o.date,type:"buy",title:`Bought ${asset(o.assetId)?.symbol||"asset"}`,detail:`${num(orderShares(o),6)} shares at ${money(o.price)}`,amount:`−${money(o.totalSpend)}`,sort:o.date}))
-    ].sort((a,b)=>String(b.sort).localeCompare(String(a.sort))).slice(0,5);
-    $("recentActivity").innerHTML=activities.map(x=>`<div class="activity-row"><span class="activity-icon"><i class="bi ${x.type==="funding"?"bi-wallet2":"bi-arrow-down-left-circle"}"></i></span><div class="activity-info"><strong>${esc(x.title)}</strong><small>${esc(x.date||"—")} · ${esc(x.detail)}</small></div><div class="activity-amount ${x.type==="funding"?"positive":""}">${x.amount}</div></div>`).join("")||'<div class="empty-state">Your recent activity will appear here.</div>';
+  async function load(showMessage=false) {
+    $('#pageContent').innerHTML='<div class="loading-state"><span class="spinner-border spinner-border-sm"></span> Loading your portfolio…</div>';
+    try {
+      const d=await api('state'); Object.assign(state,d); state.assets ||= [];state.orders ||= [];state.funding ||= [];state.plans ||= [];state.settings ||= {}; render();
+      if(showMessage) notice('Portfolio data refreshed.','success');
+      if(state.initialQuoteLoad){state.initialQuoteLoad=false; if(state.assets.length) refreshQuotes({silent:true});}
+    }
+    catch(e){ $('#pageContent').innerHTML=`<div class="panel"><div class="empty-state"><i class="bi bi-cloud-slash"></i><strong>Could not connect to your portfolio</strong><div>${esc(e.message)}</div><p class="mt-3">Check <code>site/config.js</code>, your Worker deployment, D1 binding and access key.</p><button class="btn btn-primary mt-2" id="retryBtn">Try again</button></div></div>`; $('#retryBtn')?.addEventListener('click',()=>load()); }
   }
-  function renderWallet(){
-    $("walletCredited").textContent=money(totalUsdCredited());$("walletSpent").textContent=money(totalSpend());$("walletAvailable").textContent=money(walletBalance());
-    $("walletTable").innerHTML=state.wallet.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(w=>`<tr><td>${esc(w.date||"—")}</td><td>₹${num(w.inrSent,2)}</td><td>${num(w.fx,4)}</td><td>₹${num(n(w.gst)+n(w.platformFee),2)}</td><td><strong>${money(w.usdCredited)}</strong></td><td>${esc(w.note||"—")}</td><td>${actionButtons("wallet",w.id)}</td></tr>`).join("");
-    $("walletEmpty").classList.toggle("d-none",state.wallet.length>0);
+  function notice(msg,type='') { const n=$('#notice');n.textContent=msg;n.className='notice'+(type?' '+type:'');n.classList.remove('d-none');clearTimeout(notice.timer);notice.timer=setTimeout(()=>n.classList.add('d-none'),5000); }
+  function setPage(p){state.page=p;document.querySelectorAll('#mainNav [data-page]').forEach(b=>b.classList.toggle('active',b.dataset.page===p));$('#topTitle').textContent=pageNames[p]||'Portfolio';render();}
+  function holdings(){const map={};for(const a of state.assets){map[a.id]={...a,shares:0,principal:0,totalSpend:0,commission:0};}for(const o of state.orders){const h=map[o.asset_id]||(map[o.asset_id]={id:o.asset_id,symbol:o.symbol,name:o.symbol,category:'Stock',allocation_pct:0,last_price:null,shares:0,principal:0,totalSpend:0,commission:0});h.shares+=Number(o.shares);h.principal+=Number(o.total_spend_usd)-Number(o.commission_usd);h.totalSpend+=Number(o.total_spend_usd);h.commission+=Number(o.commission_usd);}return Object.values(map).map(h=>({...h,avgCost:h.shares?h.principal/h.shares:0,price:Number(h.last_price||0),value:h.shares*Number(h.last_price||0),pnl:h.shares*Number(h.last_price||0)-h.principal}));}
+  function totals(){const hs=holdings();const principal=hs.reduce((s,h)=>s+h.principal,0);const credited=state.funding.reduce((s,f)=>s+Number(f.usd_credited),0);const spent=state.orders.reduce((s,o)=>s+Number(o.total_spend_usd),0);const value=hs.reduce((s,h)=>s+h.value,0);return {hs,principal,credited,spent,wallet:credited-spent,value,pnl:value-principal};}
+  function assetCell(a){return `<div class="asset-cell"><div class="ticker-icon">${esc((a.symbol||'?').slice(0,4))}</div><div class="asset-name"><strong>${esc(a.symbol)}</strong><small>${esc(a.name||'')}</small></div></div>`;}
+  function metric(label,value,icon,foot='',tone=''){return `<div class="metric-card"><div class="metric-top"><span>${label}</span><span class="metric-icon"><i class="bi ${icon}"></i></span></div><div class="metric-value ${tone}">${value}</div><div class="metric-foot">${foot}</div></div>`;}
+  function heading(title,desc,action=''){return `<div class="page-heading"><div><div class="eyebrow">MAARI PORTFOLIO / ${esc(state.page.toUpperCase())}</div><h1>${title}</h1><p>${desc}</p></div>${action}</div>`;}
+  function table(headers,rows,empty='Nothing here yet.'){return `<div class="table-wrap"><table class="table"><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows||`<tr><td colspan="${headers.length}"><div class="empty-state"><i class="bi bi-inbox"></i><strong>${empty}</strong><span>Add your first record to get started.</span></div></td></tr>`}</tbody></table></div>`;}
+  function actionBtns(type,id){return `<div class="d-flex gap-1"><button class="btn btn-outline-light btn-sm" data-edit="${type}" data-id="${esc(id)}" title="Edit"><i class="bi bi-pencil"></i></button><button class="btn btn-outline-light btn-sm" data-delete="${type}" data-id="${esc(id)}" title="Delete"><i class="bi bi-trash3"></i></button></div>`;}
+  function render(){const root=$('#pageContent');if(state.page==='overview')root.innerHTML=renderOverview();else if(state.page==='wallet')root.innerHTML=renderWallet();else if(state.page==='plan')root.innerHTML=renderPlan();else if(state.page==='orders')root.innerHTML=renderOrders();else if(state.page==='assets')root.innerHTML=renderAssets();else root.innerHTML=renderSettings();}
+  function renderOverview(){const t=totals(), hs=t.hs.filter(h=>h.shares>0), recent=[...state.orders.map(o=>({...o,kind:'BUY',date:o.order_date,amount:o.total_spend_usd,detail:o.symbol})),...state.funding.map(f=>({...f,kind:'FUNDING',date:f.funding_date,amount:f.usd_credited,detail:'USD wallet funding'}))].sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,6);const quoteDate=hs.map(h=>h.price_updated_at).filter(Boolean).sort().at(-1);return `${heading('Your portfolio, at a glance','A clear view of your US holdings, buying power and allocation progress.',`<button class="btn btn-outline-light" id="refreshQuotes" ${state.quotesBusy?'disabled':''}><i class="bi bi-arrow-repeat me-2"></i>${state.quotesBusy?'Refreshing…':'Refresh prices'}</button>`)}
+    <div class="metric-grid">${metric('INVESTED PRINCIPAL',money(t.principal),'bi-pie-chart','Buy cost excluding commissions')}${metric('USD WALLET',money(t.wallet),'bi-wallet2','Available buying power',t.wallet<0?'negative':'')}${metric('CURRENT MARKET VALUE',money(t.value),'bi-graph-up','Based on last refreshed quotes')}${metric('UNREALIZED P / L',`${t.pnl>=0?'+':'−'}${money(Math.abs(t.pnl))}`,'bi-activity',t.principal?`${fmt(t.pnl/t.principal*100,2)}% return on principal`:'No invested principal',t.pnl>=0?'positive':'negative')}</div>
+    <div class="section-row"><div><h2>Portfolio holdings</h2><p>Prices load automatically on app open. Use the refresh icon beside any holding to update just that stock.</p></div><span class="tiny">${hs.length} active positions</span></div><div class="panel"><div class="panel-head"><div><h3>Holdings</h3><p>${quoteDate?'Last quote refresh: '+esc(quoteDate.replace('T',' ').slice(0,16)):'Prices not refreshed yet'}</p></div><button class="btn btn-outline-light btn-sm" data-goto="assets">Manage assets <i class="bi bi-arrow-up-right ms-1"></i></button></div>${table(['ASSET','SHARES','AVG COST','LAST PRICE','MARKET VALUE','UNREALIZED P/L'],hs.map(h=>`<tr><td>${assetCell(h)}</td><td>${fmt(h.shares,6)}</td><td>${money(h.avgCost,4)}</td><td><div class="d-flex align-items-center gap-2">${h.price?money(h.price,4):'<span class="subtle">Loading quote…</span>'}<button class="btn btn-outline-light btn-sm quote-refresh" data-refresh-symbol="${esc(h.symbol)}" title="Refresh ${esc(h.symbol)} price" ${state.quoteBusySymbols.includes(h.symbol)?'disabled':''}><i class="bi bi-arrow-clockwise"></i></button></div></td><td>${money(h.value)}</td><td class="${h.pnl>=0?'positive':'negative'}">${h.pnl>=0?'+':'−'}${money(Math.abs(h.pnl))}<div class="tiny">${h.principal?fmt(h.pnl/h.principal*100,2):'0.00'}%</div></td></tr>`).join(''),'No holdings yet') }</div>
+    <div class="section-row"><div><h2>Recent activity</h2><p>Recent wallet funding and buy orders</p></div><button class="btn btn-outline-light btn-sm" data-goto="orders">View orders</button></div><div class="panel">${table(['TYPE','DATE','DETAIL','USD AMOUNT',''],recent.map(r=>`<tr><td><span class="tag">${r.kind}</span></td><td>${esc(r.date)}</td><td>${esc(r.detail)}</td><td class="${r.kind==='FUNDING'?'positive':''}">${r.kind==='FUNDING'?'+':'−'}${money(r.amount)}</td><td>${r.kind==='BUY'?`<button class="btn btn-outline-light btn-sm" data-edit="orders" data-id="${esc(r.id)}">View</button>`:''}</td></tr>`).join(''),'No activity recorded')}</div>`;}
+  function renderWallet(){const credited=state.funding.reduce((s,f)=>s+Number(f.usd_credited),0),spent=state.orders.reduce((s,o)=>s+Number(o.total_spend_usd),0);return `${heading('USD wallet','Record each INR → USD transfer using the actual INDmoney credited amount.',`<button class="btn btn-primary" data-add="funding"><i class="bi bi-plus-lg me-2"></i>Add funding</button>`)}<div class="metric-grid">${metric('TOTAL USD CREDITED',money(credited),'bi-arrow-down-left-circle','All wallet top-ups')}${metric('TOTAL BUY SPEND',money(spent),'bi-cart-check','Includes buy commissions')}${metric('AVAILABLE BALANCE',money(credited-spent),'bi-wallet2','Credited minus order spend',(credited-spent)<0?'negative':'')}${metric('FUNDING EVENTS',String(state.funding.length),'bi-receipt','Recorded transfers')}</div><div class="panel"><div class="panel-head"><div><h3>Funding history</h3><p>INR sent, conversion rate, taxes and credited USD</p></div></div>${table(['DATE','INR SENT','FX RATE','GST + FEES','USD CREDITED','NOTES',''],state.funding.map(f=>`<tr><td>${esc(f.funding_date)}</td><td>${inr(f.inr_sent)}</td><td>${fmt(f.fx_rate,4)}</td><td>${inr(Number(f.gst_inr)+Number(f.platform_fee_inr)+Number(f.other_fees_inr))}</td><td class="positive">+${money(f.usd_credited)}</td><td class="subtle">${esc(f.notes||'—')}</td><td>${actionBtns('funding',f.id)}</td></tr>`).join(''),'No funding history yet')}</div><p class="tiny">Wallet balance is based on your recorded USD credited and buy-order total spend. Enter actual credited USD from INDmoney; FX and fees are kept for audit/reference.</p>`;}
+  function renderPlan(){const plan=state.plans.find(p=>p.month===state.month)||{month:state.month,budget_usd:0,notes:''};const monthOrders=state.orders.filter(o=>(o.order_date||'').slice(0,7)===state.month);const spent=monthOrders.reduce((s,o)=>s+Number(o.total_spend_usd),0),budget=Number(plan.budget_usd||0);const totalPct=state.assets.reduce((s,a)=>s+Number(a.allocation_pct||0),0);const rows=state.assets.map(a=>{const target=budget*Number(a.allocation_pct||0)/100;const actual=monthOrders.filter(o=>o.asset_id===a.id).reduce((s,o)=>s+Number(o.total_spend_usd),0);const remain=target-actual,pct=target?actual/target*100:0;return `<tr><td>${assetCell(a)}</td><td>${fmt(a.allocation_pct,2)}%</td><td>${money(target)}</td><td>${money(actual)}</td><td style="min-width:125px"><div class="d-flex justify-content-between mb-2"><span class="tiny">${fmt(Math.min(pct,100),1)}%</span><span class="tiny">${remain>=0?money(remain):`Over ${money(-remain)}`}</span></div><div class="progress"><div class="progress-bar ${pct>100?'over':pct>=100?'good':''}" style="width:${Math.min(pct,100)}%"></div></div></td><td>${remain>0?`<span class="tag">${money(remain)} left</span>`:`<span class="tag ${remain<0?'negative':'positive'}">${remain<0?'Over target':'Allocated'}</span>`}</td></tr>`;}).join('');return `${heading('Monthly investment plan','Set your budget month by month. Your history stays saved when you switch months.',`<div class="month-control"><button class="icon-btn" id="prevMonth" title="Previous month"><i class="bi bi-chevron-left"></i></button><input class="form-control" type="month" id="monthPicker" value="${esc(state.month)}"><button class="icon-btn" id="nextMonth" title="Next month"><i class="bi bi-chevron-right"></i></button></div>`)}<div class="panel"><div class="panel-head"><div><h3>${esc(new Date(state.month+'-02T12:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'}))} plan</h3><p>Budget and target allocations for this month</p></div><button class="btn btn-primary" id="savePlan"><i class="bi bi-check2 me-2"></i>Save monthly budget</button></div><div class="row g-3 align-items-end mb-3"><div class="col-sm-5 col-lg-3"><label class="form-label" for="budgetInput">Monthly budget (USD)</label><input id="budgetInput" class="form-control" type="number" min="0" step="0.01" value="${budget}"></div><div class="col-sm-7 col-lg-5"><label class="form-label" for="planNotes">Notes (optional)</label><input id="planNotes" class="form-control" value="${esc(plan.notes||'')}" placeholder="e.g. Add extra to ETFs this month"></div><div class="col-lg-4"><div class="plan-stat"><small>Spent this month</small><strong>${money(spent)} <span class="tiny">of ${money(budget)}</span></strong><div class="progress mt-2"><div class="progress-bar ${spent>budget?'over':''}" style="width:${budget?Math.min(spent/budget*100,100):0}%"></div></div></div></div></div><div class="plan-top"><div class="plan-stat"><small>Monthly budget</small><strong>${money(budget)}</strong></div><div class="plan-stat"><small>Remaining budget</small><strong class="${budget-spent<0?'negative':''}">${money(budget-spent)}</strong></div><div class="plan-stat"><small>Asset target allocation</small><strong>${fmt(totalPct,2)}% <span class="tiny">${Math.abs(totalPct-100)<.01?'Balanced':'of 100%'}</span></strong></div></div>${Math.abs(totalPct-100)>.01?`<div class="allocation-warn mb-3"><i class="bi bi-exclamation-triangle me-1"></i>Asset allocations total ${fmt(totalPct,2)}%. Update Watchlist & Holdings to target 100%.</div>`:''}<div class="panel-head mt-4"><div><h3>Allocation tracker</h3><p>Target is based on the asset allocation percentages in your watchlist.</p></div></div>${table(['ASSET','TARGET %','TARGET AMOUNT','BOUGHT THIS MONTH','PROGRESS / REMAINING','STATUS'],rows,'Add assets to build your monthly plan')}</div><div class="panel"><div class="panel-head"><div><h3>Saved months</h3><p>Open any previous month's plan to review its progress</p></div></div>${table(['MONTH','BUDGET','NOTES',''],[...state.plans].sort((a,b)=>b.month.localeCompare(a.month)).map(p=>`<tr><td><strong>${esc(p.month)}</strong>${p.month===state.month?' <span class="tag">Current view</span>':''}</td><td>${money(p.budget_usd)}</td><td class="subtle">${esc(p.notes||'—')}</td><td><button class="btn btn-outline-light btn-sm" data-open-month="${esc(p.month)}">Open month</button> <button class="btn btn-outline-light btn-sm" data-delete="plans" data-id="${esc(p.month)}"><i class="bi bi-trash3"></i></button></td></tr>`).join(''),'No saved monthly plans')}</div>`;}
+  function renderOrders(){const total=state.orders.reduce((s,o)=>s+Number(o.total_spend_usd),0),principal=state.orders.reduce((s,o)=>s+Number(o.total_spend_usd)-Number(o.commission_usd),0);return `${heading('Buy orders','Log fractional purchases exactly as shown in INDmoney. No sell orders are included.',`<button class="btn btn-primary" data-add="orders"><i class="bi bi-plus-lg me-2"></i>Add buy order</button>`)}<div class="metric-grid">${metric('TOTAL BUY SPEND',money(total),'bi-cart-check','Including commission')}${metric('INVESTED PRINCIPAL',money(principal),'bi-pie-chart','Excluding commission')}${metric('TOTAL COMMISSION',money(total-principal),'bi-receipt','Recorded buy fees')}${metric('BUY ORDERS',String(state.orders.length),'bi-list-check','All recorded purchases')}</div><div class="panel"><div class="panel-head"><div><h3>Order history</h3><p>Every buy can be edited or deleted</p></div></div>${table(['DATE','ASSET','PRICE / SHARE','TOTAL SPEND','COMMISSION','PRINCIPAL','SHARES BOUGHT',''],state.orders.map(o=>`<tr><td>${esc(o.order_date)}</td><td>${assetCell({symbol:o.symbol,name:state.assets.find(a=>a.id===o.asset_id)?.name||o.symbol})}</td><td>${money(o.price_per_share,4)}</td><td>${money(o.total_spend_usd)}</td><td>${money(o.commission_usd,4)}</td><td>${money(Number(o.total_spend_usd)-Number(o.commission_usd))}</td><td>${fmt(o.shares,7)}</td><td>${actionBtns('orders',o.id)}</td></tr>`).join(''),'No buy orders yet')}</div>`;}
+  function renderAssets(){const total=state.assets.reduce((s,a)=>s+Number(a.allocation_pct||0),0),hs=holdings();return `${heading('Watchlist & holdings','Manage the ETFs and stocks used by your monthly allocation strategy.',`<button class="btn btn-primary" data-add="assets"><i class="bi bi-plus-lg me-2"></i>Add asset</button>`)}<div class="metric-grid">${metric('ASSETS TRACKED',String(state.assets.length),'bi-bookmark-star','Stocks and ETFs')}${metric('TARGET ALLOCATION',fmt(total,2)+'%','bi-pie-chart','Aim for 100%',Math.abs(total-100)<.01?'positive':'')}${metric('ACTIVE HOLDINGS',String(hs.filter(h=>h.shares>0).length),'bi-briefcase','Assets with recorded buys')}${metric('QUOTE COVERAGE',`${state.assets.filter(a=>a.last_price).length}/${state.assets.length}`,'bi-currency-dollar','Prices saved in database')}</div>${Math.abs(total-100)>.01?`<div class="notice allocation-warn">Your allocation adds up to ${fmt(total,2)}%. Adjust asset percentages to total 100% for a balanced monthly plan.</div>`:''}<div class="panel"><div class="panel-head"><div><h3>Assets</h3><p>Allocation percentage drives each monthly target amount</p></div></div>${table(['ASSET','TYPE','ALLOCATION','SHARES HELD','AVG COST','LAST PRICE',''],state.assets.map(a=>{const h=hs.find(x=>x.id===a.id);return `<tr><td>${assetCell(a)}</td><td><span class="tag">${esc(a.category)}</span></td><td>${fmt(a.allocation_pct,2)}%</td><td>${fmt(h?.shares,6)}</td><td>${money(h?.avgCost,4)}</td><td><div class="d-flex align-items-center gap-2">${a.last_price?money(a.last_price,4):'<span class="subtle">Not loaded</span>'}<button class="btn btn-outline-light btn-sm quote-refresh" data-refresh-symbol="${esc(a.symbol)}" title="Refresh ${esc(a.symbol)} price" ${state.quoteBusySymbols.includes(a.symbol)?'disabled':''}><i class="bi bi-arrow-clockwise"></i></button></div><div class="tiny">${a.price_updated_at?'Updated '+esc(String(a.price_updated_at).replace('T',' ').slice(0,16)):' '}</div></td><td>${actionBtns('assets',a.id)}</td></tr>`;}).join(''),'No assets yet')}</div>`;}
+  function renderSettings(){const s=state.settings||{};return `${heading('Settings','Set your default transfer costs and buy commission assumptions.',`<button class="btn btn-primary" id="saveSettings"><i class="bi bi-check2 me-2"></i>Save settings</button>`)}<div class="row g-3"><div class="col-lg-7"><div class="panel"><div class="panel-head"><div><h3>INDmoney cost assumptions</h3><p>Used as defaults when recording new transactions; past records do not change.</p></div></div><div class="row g-3"><div class="col-md-6"><label class="form-label">Default FX rate (INR per USD)</label><input class="form-control" id="setFx" type="number" min="0" step="0.0001" value="${Number(s.fx_rate||0)}"></div><div class="col-md-6"><label class="form-label">GST (INR per funding)</label><input class="form-control" id="setGst" type="number" min="0" step="0.01" value="${Number(s.gst_inr||0)}"></div><div class="col-md-6"><label class="form-label">Platform fee (INR per funding)</label><input class="form-control" id="setFee" type="number" min="0" step="0.01" value="${Number(s.platform_fee_inr||0)}"></div><div class="col-md-6"><label class="form-label">Default buy commission (USD)</label><input class="form-control" id="setCommission" type="number" min="0" step="0.0001" value="${Number(s.buy_commission_usd||0)}"></div></div><p class="form-text mt-3">Use the actual amounts from your INDmoney statements. FX/GST/fees are recorded for reference; USD wallet accounting uses actual USD credited and actual total order spend.</p></div></div><div class="col-lg-5"><div class="panel"><div class="panel-head"><div><h3>Calculation rules</h3><p>How the tracker calculates your portfolio</p></div></div><div class="mb-3"><span class="tag">Wallet</span><p class="tiny mt-2">Total USD credited − total buy-order spend, including commissions.</p></div><div class="mb-3"><span class="tag">Invested principal</span><p class="tiny mt-2">Total order spend − commission. The average cost is principal divided by shares held.</p></div><div class="mb-3"><span class="tag">Profit / loss</span><p class="tiny mt-2">Shares × last refreshed quote − invested principal.</p></div><div><span class="tag">Market prices</span><p class="tiny mt-2">Yahoo Finance chart data is fetched automatically when the app opens. Use the per-stock refresh icon to update one symbol, or Refresh prices to update all assets. This is an unofficial free source; quotes may be delayed or unavailable.</p></div></div><div class="panel"><h3 class="mb-2" style="font:700 14px var(--head)">API connection</h3><div class="tiny">${API&&!API.includes('REPLACE-WITH')?'Worker URL configured':'Worker URL needs configuration'}</div><div class="tiny mt-1">Database: Cloudflare D1</div><div class="tiny mt-1">Hosting: GitHub Pages</div></div></div></div>`;}
+
+  const fields={assets:[{key:'symbol',label:'Ticker symbol',required:true,placeholder:'e.g. QQQM',help:'Use the US market ticker.'},{key:'name',label:'Asset name',required:true,placeholder:'e.g. Invesco NASDAQ 100 ETF'},{key:'category',label:'Asset type',type:'select',options:['ETF','Stock','REIT','Other']},{key:'allocation_pct',label:'Target allocation (%)',type:'number',step:'0.01',min:'0',help:'All asset allocation percentages should total 100%.'},{key:'notes',label:'Notes',type:'textarea'}],funding:[{key:'funding_date',label:'Funding date',type:'date',required:true,default:today()},{key:'inr_sent',label:'INR sent',type:'number',step:'0.01',min:'0',required:true},{key:'fx_rate',label:'FX rate (INR / USD)',type:'number',step:'0.0001',min:'0',required:true,default:()=>state.settings.fx_rate||95.75},{key:'gst_inr',label:'GST (INR)',type:'number',step:'0.01',min:'0',default:()=>state.settings.gst_inr||0},{key:'platform_fee_inr',label:'Platform fee (INR)',type:'number',step:'0.01',min:'0',default:()=>state.settings.platform_fee_inr||0},{key:'other_fees_inr',label:'Other fees (INR)',type:'number',step:'0.01',min:'0',default:0},{key:'usd_credited',label:'USD credited to wallet',type:'number',step:'0.0001',min:'0',required:true,help:'Enter the actual USD credited by INDmoney.'},{key:'notes',label:'Notes',type:'textarea',placeholder:'Optional reference'}],orders:[{key:'order_date',label:'Order date',type:'date',required:true,default:today()},{key:'asset_id',label:'Asset',type:'asset-select',required:true},{key:'price_per_share',label:'Purchase price per share (USD)',type:'number',step:'0.0001',min:'0',required:true},{key:'total_spend_usd',label:'Total spent (USD)',type:'number',step:'0.0001',min:'0',required:true,help:'Actual total charged, including commission.'},{key:'commission_usd',label:'Commission (USD)',type:'number',step:'0.0001',min:'0',default:()=>state.settings.buy_commission_usd||0},{key:'shares',label:'Shares purchased',type:'number',step:'0.00000001',min:'0',required:true,help:'Fractional shares supported.'},{key:'notes',label:'Notes',type:'textarea'}]};
+  function openForm(type,id=null){const list=fields[type];if(!list)return;const existing=id?(type==='assets'?state.assets:type==='funding'?state.funding:state.orders).find(x=>x.id===id):null;editContext={type,id,existing};$('#modalTitle').textContent=(id?'Edit ':'Add ')+({assets:'asset',funding:'wallet funding',orders:'buy order'}[type]);$('#formError').classList.add('d-none');$('#modalFields').innerHTML=list.map(f=>{let v=existing?.[f.key];if(v===undefined)v=typeof f.default==='function'?f.default():f.default??'';const common=`name="${f.key}" id="field_${f.key}" ${f.required?'required':''} ${f.min!==undefined?`min="${f.min}"`:''} ${f.step?`step="${f.step}"`:''} placeholder="${esc(f.placeholder||'')}"`;let control='';if(f.type==='select')control=`<select class="form-select" ${common}>${f.options.map(o=>`<option ${v===o?'selected':''}>${esc(o)}</option>`).join('')}</select>`;else if(f.type==='asset-select')control=`<select class="form-select" ${common}><option value="">Choose asset…</option>${state.assets.map(a=>`<option value="${esc(a.id)}" ${v===a.id?'selected':''}>${esc(a.symbol)} · ${esc(a.name)}</option>`).join('')}</select>`;else if(f.type==='textarea')control=`<textarea class="form-control" ${common} rows="2">${esc(v)}</textarea>`;else control=`<input class="form-control" type="${f.type||'text'}" value="${esc(v)}" ${common}>`;return `<div class="col-md-6"><label class="form-label" for="field_${f.key}">${f.label}${f.required?' *':''}</label>${control}${f.help?`<div class="form-text mt-1">${f.help}</div>`:''}</div>`;}).join('');modal.show();}
+  async function submitForm(e){e.preventDefault();if(!editContext)return;const {type,id}=editContext;const data={};for(const f of fields[type]){const el=$(`#field_${f.key}`);if(!el)continue;data[f.key]=f.type==='number'||['allocation_pct','inr_sent','fx_rate','gst_inr','platform_fee_inr','other_fees_inr','usd_credited','price_per_share','total_spend_usd','commission_usd','shares'].includes(f.key)?Number(el.value||0):el.value.trim();}try{$('#saveBtn').disabled=true;await api(`${type}${id?'/'+encodeURIComponent(id):''}`,id?'PUT':'POST',data);modal.hide();notice('Record saved successfully.','success');await load();}catch(err){$('#formError').textContent=err.message;$('#formError').classList.remove('d-none');}finally{$('#saveBtn').disabled=false;}}
+  async function remove(type,id){if(!confirm('Delete this record? This cannot be undone.'))return;try{await api(`${type}/${encodeURIComponent(id)}`,'DELETE');notice('Record deleted.','success');await load();}catch(e){notice(e.message,'error');}}
+  async function saveSettings(){try{await api('settings','PUT',{fx_rate:Number($('#setFx').value),gst_inr:Number($('#setGst').value),platform_fee_inr:Number($('#setFee').value),buy_commission_usd:Number($('#setCommission').value)});notice('Settings saved.','success');await load();}catch(e){notice(e.message,'error');}}
+  async function savePlan(){try{await api('plans','POST',{month:state.month,budget_usd:Number($('#budgetInput').value||0),notes:$('#planNotes').value.trim()});notice('Monthly plan saved.','success');await load();}catch(e){notice(e.message,'error');}}
+  async function refreshQuotes(options={}){
+    const symbols=[...new Set((options.symbols||state.assets.map(a=>a.symbol)).map(s=>String(s||'').toUpperCase()).filter(Boolean))];
+    if(!symbols.length){if(!options.silent)notice('Add assets before refreshing quotes.','error');return;}
+    state.quoteBusySymbols=[...new Set([...state.quoteBusySymbols,...symbols])];state.quotesBusy=true;render();
+    try{
+      const r=await api('quotes','POST',{symbols});
+      for(const q of (r.results||[])) if(q.ok){const asset=state.assets.find(a=>String(a.symbol).toUpperCase()===q.symbol);if(asset){asset.last_price=q.price;asset.price_updated_at=new Date().toISOString();}}
+      const ok=(r.results||[]).filter(x=>x.ok).length,failed=(r.results||[]).filter(x=>!x.ok).length;
+      render();
+      if(!options.silent)notice(`Price refreshed for ${ok} of ${symbols.length} symbol${symbols.length===1?'':'s'}${failed?`. ${failed} unavailable; provider may be delayed or rate-limited`:''}.`,failed?'error':'success');
+    }catch(e){if(!options.silent)notice(e.message,'error');}
+    finally{state.quoteBusySymbols=state.quoteBusySymbols.filter(s=>!symbols.includes(s));state.quotesBusy=state.quoteBusySymbols.length>0;render();}
   }
-  function renderAllocations(){
-    $("allocMonthHeading").textContent=monthLabel();$("allocationBudgetBig").textContent=money(state.monthlyBudget);
-    const total=totalAllocation();$("allocationTotalPct").textContent=`${num(total,1)}% allocated`;$("allocationWarning").classList.toggle("d-none",Math.abs(total-100)<0.05);
-    $("allocationCards").innerHTML=state.assets.map(a=>{
-      const target=targetUsd(a),spent=monthInvestedFor(a.id),progress=target>0?Math.min(100,spent/target*100):0,remaining=target-spent;
-      const status=spent>=target&&target>0?"Target reached":spent>0?"In progress":"Not started",cls=spent>=target&&target>0?"":spent>0?"pending":"pending";
-      return `<div class="allocation-card"><div class="allocation-card-head">${avatar(a)}<div class="allocation-card-title"><strong>${esc(a.name)}</strong><span>${esc(a.symbol)} · ${pct(a.allocation)}</span></div><div class="card-actions">${actionButtons("asset",a.id)}</div></div><div class="target-amount">${money(target)}</div><div class="target-caption">Monthly target</div><div class="progress"><div class="progress-bar" style="width:${progress}%"></div></div><div class="progress-details"><span>${money(spent)} invested</span><strong>${pct(progress)}</strong></div><div class="progress-details mt-2"><span>${remaining>=0?money(remaining)+" remaining":money(-remaining)+" over target"}</span><span>Budget share ${pct(a.allocation)}</span></div><span class="allocation-status ${cls}">${status}</span></div>`;
-    }).join("")||'<div class="empty-state">Add assets to build your monthly plan.</div>';
-  }
-  function renderOrders(){
-    $("ordersTable").innerHTML=state.orders.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(o=>`<tr><td>${esc(o.date||"—")}</td><td>${assetCell(asset(o.assetId)||{name:"Deleted asset",symbol:"—"})}</td><td>${money(o.price)}</td><td><strong>${money(o.totalSpend)}</strong></td><td>${money(o.commission)}</td><td>${num(orderShares(o),8)}</td><td>${actionButtons("order",o.id)}</td></tr>`).join("");
-    $("ordersEmpty").classList.toggle("d-none",state.orders.length>0);
-  }
-  function renderAssets(){
-    $("assetsTable").innerHTML=state.assets.map(a=>{const h=holdingsFor(a.id);return `<tr><td>${assetCell(a)}</td><td>${pct(a.allocation)}</td><td><input class="price-inline" data-price="${esc(a.id)}" type="number" min="0" step="0.0001" value="${n(a.price)}" aria-label="Current price for ${esc(a.symbol)}"><button class="table-action save-price" data-save-price="${esc(a.id)}" title="Save price"><i class="bi bi-check-lg"></i></button></td><td>${num(h.shares,6)}</td><td><strong>${money(h.value)}</strong></td><td>${actionButtons("asset",a.id)}</td></tr>`;}).join("");
-    $("assetsEmpty").classList.toggle("d-none",state.assets.length>0);
-    $("assetAllocationTotal").textContent=`${num(totalAllocation(),1)}% allocated`;
-    $("orderAsset").innerHTML=state.assets.map(a=>`<option value="${esc(a.id)}">${esc(a.symbol)} — ${esc(a.name)}</option>`).join("");
-  }
-  function renderSettings(){
-    $("settingFx").value=state.settings.fx;$("settingGst").value=state.settings.gst;$("settingPlatformFee").value=state.settings.platformFee;$("settingCommission").value=state.settings.buyCommission;
-    $("apiEndpointLabel").textContent=apiBase||"Not configured";
-  }
-  function renderAll(){renderDashboard();renderWallet();renderAllocations();renderOrders();renderAssets();renderSettings();}
-  function openAsset(id){
-    const a=asset(id);$("assetForm").reset();$("assetId").value=a?.id||"";$("assetModalTitle").textContent=a?"Edit asset":"Add asset";
-    $("assetName").value=a?.name||"";$("assetSymbol").value=a?.symbol||"";$("assetAllocation").value=a?.allocation??0;$("assetPrice").value=a?.price??0;showModal("assetModal");
-  }
-  function openWallet(id){
-    const w=state.wallet.find(x=>x.id===id);$("walletForm").reset();delete $("walletUsd").dataset.touched;$("walletId").value=w?.id||"";$("walletModalTitle").textContent=w?"Edit wallet funding":"Record wallet funding";
-    $("walletDate").value=w?.date||today();$("walletInr").value=w?.inrSent??"";$("walletFx").value=w?.fx??state.settings.fx;$("walletGst").value=w?.gst??state.settings.gst;$("walletFee").value=w?.platformFee??state.settings.platformFee;$("walletNote").value=w?.note||"";
-    $("walletUsd").value=w?.usdCredited??"";calcWalletEstimate();if(!w)$("walletUsd").value="";showModal("walletModal");
-  }
-  function calcWalletEstimate(){
-    const inr=n($("walletInr").value),fx=n($("walletFx").value),fees=n($("walletGst").value)+n($("walletFee").value);
-    const estimate=fx>0?Math.max(0,inr-fees)/fx:0;$("walletEstimate").textContent=money(estimate);
-    if(!$("walletId").value && $("walletInr").value && fx>0 && !$("walletUsd").dataset.touched)$("walletUsd").value=estimate.toFixed(4);
-  }
-  function openOrder(id){
-    const o=state.orders.find(x=>x.id===id);$("orderForm").reset();$("orderId").value=o?.id||"";$("orderModalTitle").textContent=o?"Edit buy order":"Add buy order";
-    $("orderDate").value=o?.date||today();$("orderAsset").value=o?.assetId||state.assets[0]?.id||"";
-    $("orderPrice").value=o?.price??(asset($("orderAsset").value)?.price||"");$("orderSpend").value=o?.totalSpend??"";$("orderCommission").value=o?.commission??state.settings.buyCommission;calcOrderPreview();showModal("orderModal");
-  }
-  function calcOrderPreview(){
-    const price=n($("orderPrice").value),spend=n($("orderSpend").value),commission=n($("orderCommission").value),principal=Math.max(0,spend-commission);
-    $("orderSharesPreview").textContent=num(price>0?principal/price:0,8);$("orderPrincipalPreview").textContent=money(principal);
-  }
-  function exportBackup(){
-    const blob=new Blob([JSON.stringify({exportedAt:new Date().toISOString(),app:"Northstar US Stock Portfolio Tracker",state},null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`northstar-portfolio-${today()}.json`;a.click();URL.revokeObjectURL(url);toast("JSON backup exported.");
-  }
-  async function importBackup(file){
-    try{const parsed=JSON.parse(await file.text()),candidate=normalizeState(parsed.state||parsed);if(!Array.isArray(candidate.assets)||!Array.isArray(candidate.orders)||!Array.isArray(candidate.wallet))throw new Error("Backup structure is invalid.");
-      if(!confirm("Importing replaces all current portfolio data in the cloud. Continue?"))return;
-      state=candidate;renderAll();dirty=true;await saveCloud();toast("Backup imported to cloud.");
-    }catch(err){toast(`Import failed: ${err.message}`);}finally{$("importFile").value="";}
-  }
-  function deleteRecord(type,id){
-    if(!confirm("Delete this record? This change will be saved to your cloud database."))return;
-    if(type==="asset"){
-      if(state.orders.some(o=>o.assetId===id)&&!confirm("This asset has buy orders. Deleting it will remove those orders too. Continue?"))return;
-      state.assets=state.assets.filter(a=>a.id!==id);state.orders=state.orders.filter(o=>o.assetId!==id);
-    }else if(type==="wallet")state.wallet=state.wallet.filter(w=>w.id!==id);
-    else if(type==="order")state.orders=state.orders.filter(o=>o.id!==id);
-    renderAll();queueSave();toast("Record deleted.");
-  }
-  function bindEvents(){
-    document.querySelectorAll(".nav-link[data-page]").forEach(b=>b.addEventListener("click",()=>goPage(b.dataset.page)));
-    document.querySelectorAll("[data-goto]").forEach(b=>b.addEventListener("click",()=>goPage(b.dataset.goto)));
-    document.querySelectorAll("[data-page='dashboard']").forEach(b=>b.addEventListener("click",e=>{e.preventDefault();goPage("dashboard");}));
-    $("mobileMenu").addEventListener("click",()=>$("sidebar").classList.toggle("open"));
-    $("quickBuy").addEventListener("click",()=>openOrder());$("addOrderBtn").addEventListener("click",()=>openOrder());$("addAssetBtn").addEventListener("click",()=>openAsset());$("addWalletBtn").addEventListener("click",()=>openWallet());$("editBudgetBtn").addEventListener("click",()=>{const value=prompt("Enter your monthly USD budget:",String(state.monthlyBudget));if(value===null)return;if(!Number.isFinite(Number(value))||Number(value)<0){toast("Enter a valid non-negative budget.");return;}state.monthlyBudget=Number(value);renderAll();queueSave();});
-    $("changeKeyBtn").addEventListener("click",()=>{sessionStorage.removeItem("northstarPortfolioAccessKey");accessKey="";$("accessKeyInput").value="";$("keyError").textContent="";showModal("keyModal");});
-    $("connectBtn").addEventListener("click",async()=>{const key=$("accessKeyInput").value;$("keyError").textContent="";$("connectBtn").disabled=true;try{await connect(key);}catch(err){$("keyError").textContent=err.message;setCloudStatus("Not connected","error","Check key / API URL");}finally{$("connectBtn").disabled=false;}});
-    $("assetForm").addEventListener("submit",e=>{e.preventDefault();const id=$("assetId").value,record={id:id||uid(),name:$("assetName").value.trim(),symbol:$("assetSymbol").value.trim().toUpperCase(),allocation:n($("assetAllocation").value),price:n($("assetPrice").value)};if(id)state.assets=state.assets.map(a=>a.id===id?record:a);else state.assets.push(record);hideModal("assetModal");renderAll();queueSave();toast("Asset saved to cloud.");});
-    ["walletInr","walletFx","walletGst","walletFee"].forEach(id=>$(id).addEventListener("input",()=>{delete $("walletUsd").dataset.touched;calcWalletEstimate();}));
-    $("walletUsd").addEventListener("input",()=>{$("walletUsd").dataset.touched="1";});
-    $("walletForm").addEventListener("submit",e=>{e.preventDefault();const id=$("walletId").value,record={id:id||uid(),date:$("walletDate").value,inrSent:n($("walletInr").value),fx:n($("walletFx").value),gst:n($("walletGst").value),platformFee:n($("walletFee").value),usdCredited:n($("walletUsd").value),note:$("walletNote").value.trim()};if(id)state.wallet=state.wallet.map(w=>w.id===id?record:w);else state.wallet.push(record);hideModal("walletModal");renderAll();queueSave();toast("Wallet funding saved.");});
-    ["orderPrice","orderSpend","orderCommission"].forEach(id=>$(id).addEventListener("input",calcOrderPreview));
-    $("orderAsset").addEventListener("change",()=>{if(!$("orderId").value)$("orderPrice").value=asset($("orderAsset").value)?.price||0;calcOrderPreview();});
-    $("orderForm").addEventListener("submit",e=>{e.preventDefault();const id=$("orderId").value,record={id:id||uid(),date:$("orderDate").value,assetId:$("orderAsset").value,price:n($("orderPrice").value),totalSpend:n($("orderSpend").value),commission:n($("orderCommission").value)};if(record.totalSpend<record.commission){toast("Total spend must be greater than or equal to commission.");return;}if(id)state.orders=state.orders.map(o=>o.id===id?record:o);else state.orders.push(record);const a=asset(record.assetId);if(a&&record.price>0)a.price=record.price;hideModal("orderModal");renderAll();queueSave();toast("Buy order saved.");});
-    $("settingsForm").addEventListener("submit",e=>{e.preventDefault();state.settings={fx:n($("settingFx").value),gst:n($("settingGst").value),platformFee:n($("settingPlatformFee").value),buyCommission:n($("settingCommission").value)};renderSettings();queueSave();toast("Settings saved.");});
-    $("exportBtn").addEventListener("click",exportBackup);$("importFile").addEventListener("change",e=>{if(e.target.files?.[0])importBackup(e.target.files[0]);});
-    $("resetBtn").addEventListener("click",async()=>{if(!confirm("This permanently replaces the cloud portfolio with an empty default portfolio. Export a backup first if needed. Continue?"))return;state=defaultState();renderAll();dirty=true;await saveCloud();toast("Portfolio reset.");});
-    document.body.addEventListener("click",e=>{
-      const edit=e.target.closest("[data-edit]");if(edit){const type=edit.dataset.edit,id=edit.dataset.id;if(type==="asset")openAsset(id);if(type==="wallet")openWallet(id);if(type==="order")openOrder(id);return;}
-      const del=e.target.closest("[data-delete]");if(del){deleteRecord(del.dataset.delete,del.dataset.id);return;}
-      const savePrice=e.target.closest("[data-save-price]");if(savePrice){const id=savePrice.dataset.savePrice,field=document.querySelector(`[data-price="${CSS.escape(id)}"]`),a=asset(id);if(a&&field&&n(field.value)>=0){a.price=n(field.value);renderAll();queueSave();toast("Market price updated.");}}
-    });
-    window.addEventListener("online",()=>{if(dirty)saveCloud();else setCloudStatus("Online","ok");});
-    window.addEventListener("offline",()=>setCloudStatus("Offline","wait","Changes may not sync"));
-    window.addEventListener("beforeunload",e=>{if(dirty){e.preventDefault();e.returnValue="";}});
-  }
-  async function init(){
-    bindEvents();$("todayLabel").textContent=new Date().toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"});$("apiEndpointLabel").textContent=apiBase||"Not configured";
-    const savedKey=sessionStorage.getItem("northstarPortfolioAccessKey");
-    if(savedKey){$("accessKeyInput").value=savedKey;try{await connect(savedKey);}catch(err){sessionStorage.removeItem("northstarPortfolioAccessKey");accessKey="";$("keyError").textContent=`Could not connect: ${err.message}`;showModal("keyModal");}}
-    else showModal("keyModal");
-    if(!apiBase||apiBase.includes("YOUR-WORKER-NAME")){$("keyError").textContent="First deploy the Cloudflare Worker, then set its URL in site/config.js.";}
-  }
-  init();
+  document.addEventListener('click',e=>{const nav=e.target.closest('[data-page]');if(nav){setPage(nav.dataset.page);return;}const add=e.target.closest('[data-add]');if(add){openForm(add.dataset.add);return;}const edit=e.target.closest('[data-edit]');if(edit){openForm(edit.dataset.edit,edit.dataset.id);return;}const del=e.target.closest('[data-delete]');if(del){remove(del.dataset.delete,del.dataset.id);return;}const go=e.target.closest('[data-goto]');if(go){setPage(go.dataset.goto);return;}const month=e.target.closest('[data-open-month]');if(month){state.month=month.dataset.openMonth;render();return;}});
+  $('#editForm').addEventListener('submit',submitForm);$('#reloadBtn').addEventListener('click',()=>load(true));$('#mainNav').addEventListener('click',e=>{const b=e.target.closest('[data-page]');if(b)setPage(b.dataset.page);});
+  $('#pageContent').addEventListener('click',e=>{if(e.target.closest('#saveSettings'))saveSettings();if(e.target.closest('#savePlan'))savePlan();if(e.target.closest('#refreshQuotes'))refreshQuotes();const quoteBtn=e.target.closest('[data-refresh-symbol]');if(quoteBtn){e.preventDefault();e.stopPropagation();refreshQuotes({symbols:[quoteBtn.dataset.refreshSymbol]});}if(e.target.closest('#prevMonth')){const d=new Date(state.month+'-02T12:00:00');d.setMonth(d.getMonth()-1);state.month=d.toISOString().slice(0,7);render();}if(e.target.closest('#nextMonth')){const d=new Date(state.month+'-02T12:00:00');d.setMonth(d.getMonth()+1);state.month=d.toISOString().slice(0,7);render();}});
+  $('#pageContent').addEventListener('change',e=>{if(e.target.id==='monthPicker'){state.month=e.target.value||currentMonth();render();}});
+  modal=new bootstrap.Modal($('#editModal'));load();
 })();

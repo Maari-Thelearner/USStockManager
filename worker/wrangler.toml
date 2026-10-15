@@ -1,13 +1,12 @@
-name = "northstar-portfolio-api"
+name = "usstockmanager-api"
 main = "src/index.js"
-compatibility_date = "2026-10-10"
+compatibility_date = "2026-10-01"
 
 [[d1_databases]]
-binding = "PORTFOLIO_DB"
-database_name = "northstar-portfolio-db"
-database_id = "7d150a59-17f0-411b-af7c-669bf005b6ef"
+binding = "DB"
+database_name = "usstockmanager-db"
+database_id = "ab41ab34-aad8-464a-81a4-7ce9a774725d"
 
 [vars]
-# Set this to the ORIGIN only, with no repository path.
-# Example for GitHub Pages: https://yourname.github.io
-ALLOWED_ORIGIN = "https://maari-thelearner.github.io"
+ALLOWED_ORIGIN = "*"
+# Set APP_ACCESS_KEY using `wrangler secret put APP_ACCESS_KEY`; do not put secrets here.
